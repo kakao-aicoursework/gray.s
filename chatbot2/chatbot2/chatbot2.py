@@ -4,9 +4,74 @@ from datetime import datetime
 
 import pynecone as pc
 from pynecone.base import Base
-
+from langchain.llms import OpenAI
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import ChatPromptTemplate
+from langchain.chains import LLMChain
+from pprint import pprint
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
+llm = OpenAI(temperature=0.9)
+
+
+template = """
+<이전대화>
+{before_chat}
+</이전대화>
+
+<질문>
+{query}
+</질문>
+
+<참고자료>
+{document}
+</참고자료>
+
+필요 시 <참고자료>와 <이전대화>를 활용해 대화에서 <질문>에 대한 대답을 생성해 줘.
+[GUIDELINE]
+1. 절대 <질문>에 없는 내용에 대해 미리 대답하지 말 것.
+2. 절대 "자세한 내용은 참고자료를 확인해주세요."라는 말을 하지 말 것.
+"""
+
+llm = ChatOpenAI(temperature=0.1, max_tokens=500, model="gpt-3.5-turbo-16k")
+
+def create_chain(llm, output_key='output'):
+    return LLMChain(
+        llm=llm,
+        prompt=ChatPromptTemplate.from_template(
+            template=template,
+        ),
+        output_key=output_key,
+        verbose=True,
+    )
+chain = create_chain(llm)
+
+
+def read_document(file_path: str) -> str:
+    with open(file_path, "r") as f:
+        document = f.read()
+    return document
+document = read_document("project_data_카카오싱크_short.txt")
+
+
+def just_chat(text, historys) -> str:
+    before_chat = ""
+    for history in historys:
+        before_chat = before_chat + f"{history.role} : {history.text}\n"
+
+    print("== before_chat == ")
+    print(before_chat)
+    result = chain(dict(
+        before_chat=before_chat,
+        query=text,
+        document=document
+    ))
+
+    print("== result ==")
+    print(result['output'])
+
+    # Return
+    return result['output']
 
 
 def just_chat_chatgpt(text, historys) -> str:
@@ -23,9 +88,12 @@ def just_chat_chatgpt(text, historys) -> str:
     prompt.extend(before_chat)
 
     # API 호출
-    response = openai.ChatCompletion.create(model="gpt-3.5-turbo",
-                                            messages=prompt)
-    answer_text = response['choices'][0]['message']['content']
+    # response = openai.ChatCompletion.create(model="gpt-3.5-turbo",
+    #                                         messages=prompt)
+    # answer_text = response['choices'][0]['message']['content']
+
+    answer_text = llm(prompt)
+
     # Return
     return answer_text
 
@@ -57,7 +125,7 @@ class State(pc.State):
         ]
 
         if self.text.strip():
-            answer_text = just_chat_chatgpt(self.text, self.messages)
+            answer_text = just_chat(self.text, self.messages)
             self.messages = self.messages + [
                 Message(
                     role='assistant',
