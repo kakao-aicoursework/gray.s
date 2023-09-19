@@ -53,7 +53,7 @@ def read_document(file_path: str) -> str:
     with open(file_path, "r") as f:
         document = f.read()
     return document
-document = read_document("project_data_카카오싱크_short.txt")
+document = read_document("project_data_카카오싱크.txt")
 
 
 def just_chat(text, historys) -> str:
