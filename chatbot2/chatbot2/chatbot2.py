@@ -15,6 +15,8 @@ llm = OpenAI(temperature=0.9)
 
 
 template = """
+너는 카카오에 고용된 직원으로, [GUIDELINE]을 반드시 준수해야해.
+
 <이전대화>
 {before_chat}
 </이전대화>
@@ -30,7 +32,7 @@ template = """
 필요 시 <참고자료>와 <이전대화>를 활용해 대화에서 <질문>에 대한 대답을 생성해 줘.
 [GUIDELINE]
 1. 절대 <질문>에 없는 내용에 대해 미리 대답하지 말 것.
-2. 절대 "자세한 내용은 참고자료를 확인해주세요."라는 말을 하지 말 것.
+2. 절대 참고자료를 직접 확인하라는 의미의 말을 하지 말 것.
 """
 
 llm = ChatOpenAI(temperature=0.1, max_tokens=500, model="gpt-3.5-turbo-16k")
