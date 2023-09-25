@@ -1,22 +1,45 @@
 import openai
-import os
 from datetime import datetime
-
+import os
 import pynecone as pc
 from pynecone.base import Base
-from langchain.llms import OpenAI
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts.chat import ChatPromptTemplate
 from langchain.chains import LLMChain
-from pprint import pprint
+from langchain.agents.tools import Tool
+from langchain.agents import initialize_agent
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
-llm = OpenAI(temperature=0.9)
+
+class CustomVectorDB():
+    CHROMA_PERSIST_DIR = "chroma-persist"
+    CHROMA_COLLECTION_NAME = "dosu-bot"
+    _db = None
+    _retriever = None
+
+    def __init__(self):
+        self._db = Chroma(
+            persist_directory=self.CHROMA_PERSIST_DIR,
+            embedding_function=OpenAIEmbeddings(),
+            collection_name=self.CHROMA_COLLECTION_NAME,
+        )
+        self._retriever = self._db.as_retriever()
+
+
+    def query(self, query: str, use_retriever: bool = True) -> list[str]:
+        if use_retriever:
+            docs = self._retriever.get_relevant_documents(query)
+        else:
+            docs = self._db.similarity_search(query)
+
+        str_docs = [doc.page_content for doc in docs]
+
+        return str_docs
 
 
 template = """
-너는 카카오에 고용된 직원으로, [GUIDELINE]을 반드시 준수해야해.
-
 <이전대화>
 {before_chat}
 </이전대화>
@@ -29,13 +52,16 @@ template = """
 {document}
 </참고자료>
 
+너는 카카오에 고용된 직원으로, <GUIDELINE>을 반드시 준수해야해.
 필요 시 <참고자료>와 <이전대화>를 활용해 대화에서 <질문>에 대한 대답을 생성해 줘.
-[GUIDELINE]
+<GUIDELINE>
 1. 절대 <질문>에 없는 내용에 대해 미리 대답하지 말 것.
 2. 절대 참고자료를 직접 확인하라는 의미의 말을 하지 말 것.
+</GUIDELINE>
 """
 
-llm = ChatOpenAI(temperature=0.1, max_tokens=500, model="gpt-3.5-turbo-16k")
+llm = ChatOpenAI(temperature=0.0, max_tokens=500, model="gpt-3.5-turbo-16k")
+custom_vectordb = CustomVectorDB()
 
 def create_chain(llm, output_key='output'):
     return LLMChain(
@@ -49,55 +75,39 @@ def create_chain(llm, output_key='output'):
 chain = create_chain(llm)
 
 
-def read_document(file_path: str) -> str:
-    with open(file_path, "r") as f:
-        document = f.read()
-    return document
-document = read_document("project_data_카카오싱크.txt")
+def chat_with_agent(text, func_messages) -> str:
+    # 무한루프(이전 출력의 결과를 질문으로 받아들이고 반복적으로 대답) 및 오류로 인해 사용 불가ㅠㅜ
+    tools =[
+        Tool(
+            name="search_vectordb",
+            func=custom_vectordb.query,
+            description="카카오싱크의 메뉴얼을 참조 할 때 유용합니다.",
+        ),
+        Tool(
+            name="before_chat",
+            func=func_messages,
+            description="이전 대회를 참고해서 대답해야 할 때 유용합니다.",
+        ),
+    ]
+
+    agent = initialize_agent(tools, llm, agent="zero-shot-react-description", verbose=True)
+    result = agent.run(text)
+    print("\n=== result ===" )
+    print(result)
+    return result
 
 
-def just_chat(text, historys) -> str:
-    before_chat = ""
-    for history in historys:
-        before_chat = before_chat + f"{history.role} : {history.text}\n"
+def just_chat(text, func_messages) -> str:
+    before_chat = func_messages(text)
 
-    print("== before_chat == ")
-    print(before_chat)
     result = chain(dict(
         before_chat=before_chat,
         query=text,
-        document=document
+        document=custom_vectordb.query(text)
     ))
-
-    print("== result ==")
-    print(result['output'])
 
     # Return
     return result['output']
-
-
-def just_chat_chatgpt(text, historys) -> str:
-
-    # system instruction 만들고
-    system_instruction = f"assistant는 친절한 우리들의 이웃이에요."
-
-    before_chat = []
-    for history in historys:
-        before_chat.append({"role": history.role, "content":history.text})
-    # messages를만들고
-    prompt = []
-    prompt.append({"role": "system", "content": system_instruction})
-    prompt.extend(before_chat)
-
-    # API 호출
-    # response = openai.ChatCompletion.create(model="gpt-3.5-turbo",
-    #                                         messages=prompt)
-    # answer_text = response['choices'][0]['message']['content']
-
-    answer_text = llm(prompt)
-
-    # Return
-    return answer_text
 
 
 class Message(Base):
@@ -116,6 +126,12 @@ class State(pc.State):
     def get_messages(self) -> list[Message]:
         return self.messages
 
+    def func_messages(self, query):
+        before_chat = ""
+        for history in self.messages:
+            before_chat = before_chat + f"{history.role} : {history.text}\n"
+
+        return before_chat
 
     def post(self):
         self.messages = self.messages + [
@@ -127,7 +143,7 @@ class State(pc.State):
         ]
 
         if self.text.strip():
-            answer_text = just_chat(self.text, self.messages)
+            answer_text = just_chat(self.text, self.func_messages)
             self.messages = self.messages + [
                 Message(
                     role='assistant',
